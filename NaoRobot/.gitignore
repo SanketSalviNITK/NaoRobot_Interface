@@ -11,12 +11,18 @@ nao_env/
 venv/
 .venv/
 
-# SDKs & Bulky Binaries
-pynaoqi-*/
-*.dll
+# Bulky Binaries & Installers
+*.msi
 *.exe
 *.zip
 *.rar
+*.dll
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # IDEs
 .vscode/
