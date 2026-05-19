@@ -11,7 +11,7 @@ export default function NeuralChat({ dialogue }) {
   }, [dialogue]);
 
   return (
-    <div className="glass-card flex flex-col h-[450px] border-primary/10 relative overflow-hidden bg-black/40">
+    <div className="flex flex-col h-full border-primary/10 relative overflow-hidden bg-black/40">
       {/* Chat Header */}
       <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between bg-white/5">
         <div className="flex items-center gap-3">

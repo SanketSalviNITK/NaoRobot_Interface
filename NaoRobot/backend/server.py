@@ -6,16 +6,44 @@ sdk_path = r"C:\Users\ARVR\Downloads\pynaoqi-python2.7-2.8.6.23-win64-vs2015-201
 if os.path.exists(sdk_path):
     sys.path.append(sdk_path)
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from robot_controller import NaoRobot
 import os
+import time
 
 app = Flask(__name__)
 CORS(app)
 
 # Global robot instance
 robot = NaoRobot(ip="169.254.175.171", mock=False)
+
+def gen_frames():
+    while True:
+        frame = robot.get_frame()
+        if frame:
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+        else:
+            # Generate a "NO SIGNAL" placeholder frame
+            from PIL import Image, ImageDraw
+            import io
+            img = Image.new('RGB', (320, 240), color = (20, 20, 30))
+            d = ImageDraw.Draw(img)
+            d.text((110,110), "OPTICAL_OFFLINE", fill=(0,242,255))
+            
+            buf = io.BytesIO()
+            img.save(buf, format='JPEG')
+            frame = buf.getvalue()
+            
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+            time.sleep(1.0) # Lower frame rate for standby
+
+@app.route('/api/video_feed')
+def video_feed():
+    return Response(gen_frames(),
+                    mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/api/connect', methods=['POST'])
 def connect():

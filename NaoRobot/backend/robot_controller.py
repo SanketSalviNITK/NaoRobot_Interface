@@ -1,4 +1,5 @@
 import logging
+import os
 from nao_agent import NaoAgent
 
 # Set up logging
@@ -31,7 +32,15 @@ class NaoRobot(object):
                 self.memory = self.session.service("ALMemory")
                 self.speech_rec = self.session.service("ALSpeechRecognition")
                 self.life = self.session.service("ALAutonomousLife")
+                self.video = self.session.service("ALVideoDevice")
                 
+                # Subscribe to Top Camera (0), kQVGA (1), kRGBColorSpace (11), 15 FPS
+                self.camera_client = "NaoOS_Camera_" + str(os.getpid())
+                try:
+                    self.camera_client = self.video.subscribeCamera(self.camera_client, 0, 1, 11, 15)
+                except:
+                    pass
+
                 self.connected = True
                 logger.info("Connected to Robot at {}:{}".format(ip, port))
                 
@@ -46,6 +55,8 @@ class NaoRobot(object):
         logger.info("Disconnecting from Robot...")
         if self.session:
             try:
+                if self.video and self.camera_client:
+                    self.video.unsubscribe(self.camera_client)
                 self.session.close()
             except:
                 pass
@@ -151,6 +162,31 @@ class NaoRobot(object):
         if not self.mock and self.motion:
             self.motion.wakeUp()
         return {"status": "success", "message": "Robot is awake"}
+
+    def get_frame(self):
+        """Returns JPEG bytes of the current camera frame"""
+        if not self.mock and self.video and self.camera_client:
+            try:
+                image_data = self.video.getImageRemote(self.camera_client)
+                if image_data:
+                    width = image_data[0]
+                    height = image_data[1]
+                    array = image_data[6]
+                    
+                    from PIL import Image
+                    import io
+                    # Create image from raw RGB buffer
+                    img = Image.frombytes("RGB", (width, height), str(array))
+                    
+                    # Convert to JPEG bytes
+                    buf = io.BytesIO()
+                    img.save(buf, format='JPEG', quality=70)
+                    return buf.getvalue()
+            except Exception as e:
+                logger.error("Frame Capture Failed: {}".format(e))
+        
+        # Mock/Fallback: Send a placeholder image or nothing
+        return None
 
     def fetch_sensors(self):
         sensors = {
