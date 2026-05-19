@@ -1,3 +1,4 @@
+import os
 import asyncio
 import json
 import google.generativeai as genai
@@ -18,7 +19,7 @@ class CognitionAgent(BaseAgent):
         }
         
         # --- CONFIGURE GEMINI ---
-        API_KEY = "AIzaSyB8_zu7bypuS32_qrwq3i5S5joQpqC-uZg"
+        API_KEY = os.getenv("GEMINI_API_KEY", "your-key-here")
         try:
             genai.configure(api_key=API_KEY)
             self.model = genai.GenerativeModel('gemini-1.5-flash')
