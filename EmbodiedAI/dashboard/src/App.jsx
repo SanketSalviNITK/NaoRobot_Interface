@@ -2,7 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Activity, Cpu, Sliders, Volume2, VolumeX, Eye, EyeOff, 
   Mic, MicOff, Database, Sparkles, Shield, HardDrive, 
-  Bell, Send, UploadCloud, BatteryCharging, Wifi 
+  Bell, Send, UploadCloud, BatteryCharging, Wifi, 
+  ChevronsUp, ChevronsDown, Move, Speech, HelpCircle, 
+  Volume, AlertCircle
 } from 'lucide-react';
 
 export default function App() {
@@ -20,19 +22,32 @@ export default function App() {
   const [ledFeedback, setLedFeedback] = useState(true);
   const [audioVolume, setAudioVolume] = useState(true);
 
-  // 4. Live Telemetry State
+  // 4. Speech Recognition States
+  const [isListening, setIsListening] = useState(false);
+  const [speechConfidence, setSpeechConfidence] = useState(0);
+
+  // 5. Kinetic Motions Module States
+  const [activeMotion, setActiveMotion] = useState('');
+  const [jointAngles, setJointAngles] = useState({
+    headYaw: 0.0,
+    shoulderPitch: 85.4,
+    elbowRoll: -24.6,
+    hipPitch: -4.2
+  });
+
+  // 6. Live Telemetry State
   const [battery, setBattery] = useState(88);
   const [jointTemp, setJointTemp] = useState(38.4);
   const [latency, setLatency] = useState(12);
   const [inferenceTime, setInferenceTime] = useState(1.42);
 
-  // 5. Chat Console State
+  // 7. Chat Console State
   const [messages, setMessages] = useState([
     { id: 1, sender: 'bot', text: 'Holographic interface stabilized. I am ready to assist.', gesture: 'explain' },
   ]);
   const [inputText, setInputText] = useState('');
 
-  // 6. Real-time Logs State
+  // 8. Real-time Logs State
   const [logs, setLogs] = useState([
     { id: 1, time: '12:00:04', level: 'info', text: 'ALBroker initialized successfully at 169.254.175.100:5001' },
     { id: 2, time: '12:00:05', level: 'info', text: 'LM Studio server detected on local interfaces' },
@@ -42,17 +57,27 @@ export default function App() {
   const chatEndRef = useRef(null);
   const logsEndRef = useRef(null);
 
-  // Fluctuating Telemetry Effect to make it feel alive!
+  // Fluctuating Telemetry & Joints Effect
   useEffect(() => {
     const interval = setInterval(() => {
       setLatency(prev => Math.max(8, Math.min(20, prev + (Math.random() > 0.5 ? 1 : -1))));
       setJointTemp(prev => Math.max(37, Math.min(42, prev + parseFloat((Math.random() * 0.2 - 0.1).toFixed(2)))));
       setInferenceTime(prev => Math.max(1.1, Math.min(1.9, prev + parseFloat((Math.random() * 0.1 - 0.05).toFixed(2)))));
+
+      // Tiny natural fluctuating micro-movements (Autonomous Life!)
+      if (lifeState) {
+        setJointAngles(prev => ({
+          headYaw: parseFloat((prev.headYaw + (Math.random() * 0.8 - 0.4)).toFixed(1)),
+          shoulderPitch: parseFloat((prev.shoulderPitch + (Math.random() * 0.6 - 0.3)).toFixed(1)),
+          elbowRoll: parseFloat((prev.elbowRoll + (Math.random() * 0.8 - 0.4)).toFixed(1)),
+          hipPitch: parseFloat((prev.hipPitch + (Math.random() * 0.4 - 0.2)).toFixed(1))
+        }));
+      }
     }, 3000);
     return () => clearInterval(interval);
-  }, []);
+  }, [lifeState]);
 
-  // Scroll to bottom helper
+  // Scroll helpers
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -68,6 +93,45 @@ export default function App() {
     setLogs(prev => [...prev, { id: Date.now(), time: timeStr, level, text }]);
   };
 
+  // Speech Recognition Mic Click Handler
+  const handleMicClick = () => {
+    if (isListening) {
+      setIsListening(false);
+      addLog('warn', 'Voice Recognition: Continuous ingestion capture manually aborted');
+      return;
+    }
+
+    setIsListening(true);
+    setSpeechConfidence(0);
+    addLog('info', 'Voice Ingestion: Continuous capture active... Capturing audio stream');
+
+    // Simulate vocal recording and automatic transcription timeout
+    setTimeout(() => {
+      setIsListening(false);
+      setSpeechConfidence(96.4);
+      
+      const recognizedText = "Wave hand and check health status";
+      addLog('info', `Whisper STT: Audio transcribed (confidence: 96.4%)`);
+      
+      const userMsg = { id: Date.now(), sender: 'user', text: `[Voice Command] "${recognizedText}"` };
+      setMessages(prev => [...prev, userMsg]);
+      
+      // Dispatch motion response
+      setTimeout(() => {
+        setMessages(prev => [...prev, {
+          id: Date.now() + 1,
+          sender: 'bot',
+          text: 'Vocal command recognized! Calibrating kinetic posture and executing high wave sequence.',
+          gesture: 'wave'
+        }]);
+        triggerMotion('wave');
+        addLog('info', 'Speech Synthesis: Auditory feedback dispatched through side speakers');
+      }, 1000);
+
+    }, 3000);
+  };
+
+  // Dispatch text commands
   const handleSendMessage = (e) => {
     e.preventDefault();
     if (!inputText.trim()) return;
@@ -99,8 +163,42 @@ export default function App() {
         text: botResponse,
         gesture: gesturesEnabled ? mockGesture : null
       }]);
+      
+      if (gesturesEnabled) {
+        triggerMotion(mockGesture);
+      }
       addLog('info', `Speech synthesis complete. Triggered gesture: ${mockGesture}`);
     }, 1000);
+  };
+
+  // Kinetic Motion Trigger
+  const triggerMotion = (motionKey) => {
+    setActiveMotion(motionKey);
+    addLog('info', `Actuator Module: Dispatching motion trigger [${motionKey}] to ALMotion`);
+
+    // Calibrate mock joint angle indicators based on the gesture clicked!
+    setTimeout(() => {
+      if (motionKey === 'stand') {
+        setJointAngles({ headYaw: 0.0, shoulderPitch: -10.5, elbowRoll: -12.4, hipPitch: 0.0 });
+        addLog('info', 'MotInfo: Posture [StandUp] execution verified by joint encoders');
+      } else if (motionKey === 'sit') {
+        setJointAngles({ headYaw: 0.0, shoulderPitch: 82.3, elbowRoll: -22.5, hipPitch: -74.2 });
+        addLog('info', 'MotInfo: Posture [SitDown] execution verified by joint encoders');
+      } else if (motionKey === 'relax') {
+        setJointAngles({ headYaw: 0.0, shoulderPitch: 88.2, elbowRoll: -8.4, hipPitch: -80.6 });
+        addLog('info', 'MotInfo: Posture [Relax] execution verified by joint encoders');
+      } else if (motionKey === 'wave') {
+        setJointAngles(prev => ({ ...prev, shoulderPitch: -65.2, elbowRoll: 42.6 }));
+        addLog('info', 'MotInfo: Gesture [WaveHand] execution complete');
+      } else if (motionKey === 'thinking') {
+        setJointAngles(prev => ({ ...prev, headYaw: -14.2, shoulderPitch: 45.3 }));
+        addLog('info', 'MotInfo: Gesture [Thinking] execution complete');
+      } else if (motionKey === 'bow') {
+        setJointAngles(prev => ({ ...prev, hipPitch: -32.4 }));
+        addLog('info', 'MotInfo: Gesture [Bowing] execution complete');
+      }
+      setActiveMotion('');
+    }, 800);
   };
 
   const handleToggle = (name, setter, val) => {
@@ -140,9 +238,10 @@ export default function App() {
       {/* 📊 MAIN DASHBOARD GRID */}
       <main className="dashboard-grid">
         
-        {/* ================= LEFT COLUMN: TELEMETRY ================= */}
+        {/* ================= LEFT COLUMN: TELEMETRY & MOTIONS ================= */}
         <section className="telemetry-col">
-          <div className="glass-panel" style={{ flex: 1 }}>
+          {/* Telemetry Panel */}
+          <div className="glass-panel">
             <div className="panel-header">
               <div className="panel-title">
                 <Activity size={16} className="cyan" />
@@ -188,16 +287,77 @@ export default function App() {
                 <div className="bar-fill" style={{ width: `${(latency / 50) * 100}%` }}></div>
               </div>
             </div>
+          </div>
 
-            {/* Inference Latency */}
-            <div className="telemetry-card">
-              <span className="telemetry-label">Local Inference</span>
-              <div className="telemetry-value-row">
-                <span className="telemetry-value cyan">{inferenceTime.toFixed(2)}s</span>
-                <span className="telemetry-unit">Gemma</span>
+          {/* NEW: Kinetic Motions Module Panel */}
+          <div className="glass-panel kinetic-motion-panel">
+            <div className="panel-header">
+              <div className="panel-title">
+                <Move size={16} style={{ color: 'var(--secondary)' }} />
+                <h3>Kinetic Actuators</h3>
               </div>
-              <div className="bar-container">
-                <div className="bar-fill" style={{ width: `${(inferenceTime / 3) * 100}%` }}></div>
+              <span className="panel-subtitle" style={{ color: 'var(--secondary)' }}>ALMotion</span>
+            </div>
+
+            {/* Live Joint Position Indicators */}
+            <div className="joint-monitor-grid">
+              <div className="joint-card">
+                <span className="joint-name">Head Yaw</span>
+                <span className="joint-angle-value">{jointAngles.headYaw.toFixed(1)}°</span>
+              </div>
+              <div className="joint-card">
+                <span className="joint-name">L-Shoulder Pitch</span>
+                <span className="joint-angle-value">{jointAngles.shoulderPitch.toFixed(1)}°</span>
+              </div>
+              <div className="joint-card">
+                <span className="joint-name">L-Elbow Roll</span>
+                <span className="joint-angle-value">{jointAngles.elbowRoll.toFixed(1)}°</span>
+              </div>
+              <div className="joint-card">
+                <span className="joint-name">L-Hip Pitch</span>
+                <span className="joint-angle-value">{jointAngles.hipPitch.toFixed(1)}°</span>
+              </div>
+            </div>
+
+            {/* Posture Controls */}
+            <div className="motion-category">
+              <span className="category-title">Posture Shifts</span>
+              <div className="motion-buttons-grid">
+                {[
+                  { name: 'Stand Up', key: 'stand' },
+                  { name: 'Sit Down', key: 'sit' },
+                  { name: 'Relax', key: 'relax' }
+                ].map((act) => (
+                  <button 
+                    key={act.key} 
+                    className={`motion-action-btn ${activeMotion === act.key ? 'active' : ''}`}
+                    onClick={() => triggerMotion(act.key)}
+                  >
+                    <ChevronsUp size={14} />
+                    {act.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Gestural Controls */}
+            <div className="motion-category">
+              <span className="category-title">Social Gestures</span>
+              <div className="motion-buttons-grid">
+                {[
+                  { name: 'Wave Hand', key: 'wave' },
+                  { name: 'Thinking', key: 'thinking' },
+                  { name: 'Bowing', key: 'bow' }
+                ].map((act) => (
+                  <button 
+                    key={act.key} 
+                    className={`motion-action-btn ${activeMotion === act.key ? 'active' : ''}`}
+                    onClick={() => triggerMotion(act.key)}
+                  >
+                    <Sparkles size={14} />
+                    {act.name}
+                  </button>
+                ))}
               </div>
             </div>
           </div>
@@ -212,6 +372,38 @@ export default function App() {
                 <h3>Dialogue & RAG Controller</h3>
               </div>
               <span className="panel-subtitle">Neural Interface</span>
+            </div>
+
+            {/* NEW: Speech Recognition panel */}
+            <div className={`voice-recognition-panel ${isListening ? 'active' : ''}`}>
+              <button 
+                type="button" 
+                className={`mic-activation-btn ${isListening ? 'active' : ''}`}
+                onClick={handleMicClick}
+                title={isListening ? 'Mute Speech Capture' : 'Activate Speech Recognition'}
+              >
+                {isListening ? <Mic size={20} /> : <MicOff size={20} />}
+              </button>
+              <div className="voice-wave">
+                {Array.from({ length: 12 }).map((_, idx) => (
+                  <div 
+                    key={idx} 
+                    className="wave-bar"
+                    style={{ 
+                      animationDuration: isListening ? `${0.4 + Math.random() * 0.6}s` : '0s',
+                      height: isListening ? undefined : '4px'
+                    }}
+                  />
+                ))}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                <span style={{ fontSize: '10px', fontWeight: '800', uppercase: true, letterSpacing: '0.5px' }}>
+                  {isListening ? 'Whisper Listening...' : 'Speech Recognition'}
+                </span>
+                <span style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)', fontFamily: 'var(--font-mono)' }}>
+                  {isListening ? 'STREAMING ACTIVE' : speechConfidence > 0 ? `Confidence: ${speechConfidence}%` : 'TAP MIC TO OVERRIDE'}
+                </span>
+              </div>
             </div>
 
             {/* Scrolling Chat Box */}

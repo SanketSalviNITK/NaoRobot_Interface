@@ -277,8 +277,8 @@ body {
 
 .chat-box {
   flex: 1;
-  min-height: 400px;
-  max-height: 520px;
+  min-height: 320px;
+  max-height: 400px;
   background: rgba(0, 0, 0, 0.2);
   border: 1px solid rgba(255, 255, 255, 0.03);
   border-radius: 12px;
@@ -386,6 +386,159 @@ body {
 .send-btn:hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 15px rgba(0, 240, 255, 0.3);
+}
+
+/* Dynamic Voice Recognition Wave Section */
+.voice-recognition-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(0, 240, 255, 0.03);
+  border: 1px solid rgba(0, 240, 255, 0.15);
+  padding: 16px;
+  border-radius: 12px;
+  gap: 16px;
+}
+
+.mic-activation-btn {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(0, 240, 255, 0.1);
+  border: 2px solid var(--primary);
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 0 10px rgba(0, 240, 255, 0.15);
+}
+
+.mic-activation-btn.active {
+  background: var(--primary);
+  color: #000;
+  box-shadow: 0 0 20px var(--primary);
+  animation: mic-pulsate 1.5s infinite;
+}
+
+.voice-wave {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 32px;
+  flex: 1;
+  justify-content: center;
+}
+
+.wave-bar {
+  width: 3px;
+  height: 4px;
+  background: rgba(0, 240, 255, 0.3);
+  border-radius: 2px;
+  transition: all 0.2s ease;
+}
+
+.voice-recognition-panel.active .wave-bar {
+  background: var(--primary);
+  animation: audio-bounce 1s infinite alternate;
+}
+
+/* Alternate animation offsets for wave effect */
+.voice-recognition-panel.active .wave-bar:nth-child(2n) { animation-delay: 0.15s; }
+.voice-recognition-panel.active .wave-bar:nth-child(3n) { animation-delay: 0.3s; }
+.voice-recognition-panel.active .wave-bar:nth-child(4n) { animation-delay: 0.45s; }
+
+/* Kinetic Motion Module styling */
+.kinetic-motion-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.motion-category {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.category-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: rgba(255, 255, 255, 0.4);
+  border-left: 2px solid var(--secondary);
+  padding-left: 8px;
+}
+
+.motion-buttons-grid {
+  display: grid;
+  grid-template-cols: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.motion-action-btn {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  padding: 10px 8px;
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.motion-action-btn:hover {
+  background: rgba(189, 0, 255, 0.05);
+  border-color: var(--secondary);
+  color: #fff;
+  box-shadow: 0 0 10px rgba(189, 0, 255, 0.15);
+}
+
+.motion-action-btn.active {
+  background: var(--secondary);
+  border-color: var(--secondary);
+  color: #fff;
+  box-shadow: 0 0 12px var(--secondary);
+}
+
+/* Joint Position Indicator Grid */
+.joint-monitor-grid {
+  display: grid;
+  grid-template-cols: 1fr 1fr;
+  gap: 12px;
+  background: rgba(0,0,0,0.15);
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.03);
+}
+
+.joint-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.joint-name {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: rgba(255, 255, 255, 0.3);
+  text-transform: uppercase;
+}
+
+.joint-angle-value {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--primary);
 }
 
 /* Toggle Switch Control Matrix */
@@ -499,7 +652,7 @@ input:checked + .slider:before {
   border: 1px dashed var(--border-color);
   background: rgba(0, 0, 0, 0.2);
   border-radius: 12px;
-  padding: 24px;
+  padding: 20px;
   text-align: center;
   display: flex;
   flex-direction: column;
@@ -585,4 +738,15 @@ input:checked + .slider:before {
 @keyframes slide-up {
   from { transform: translateY(8px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes mic-pulsate {
+  0% { box-shadow: 0 0 0 0 rgba(0, 240, 255, 0.4); }
+  70% { box-shadow: 0 0 0 10px rgba(0, 240, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 240, 255, 0); }
+}
+
+@keyframes audio-bounce {
+  0% { height: 4px; }
+  100% { height: 32px; }
 }
