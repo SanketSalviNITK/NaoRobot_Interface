@@ -1,0 +1,31 @@
+# Git Ignore configuration for EmbodiedAI
+
+# Blender Digital Twin & MCP Server
+blender_addon_server.py
+build_nao_model.py
+blender_mcp_server.py
+nao_twin_bridge.py
+spawn_nao.py
+download_nao_meshes.py
+nao_meshes/
+check_connections.py
+joint_self_test.py
+parse_nao_urdf.py
+calculate_nao_tpose.py
+
+
+
+
+
+# Python environments and compilation cache
+*.pyc
+__pycache__/
+nao_env/
+
+# FFMPEG and system local binaries
+ffmpeg.exe
+
+# Local editor settings
+.vscode/
+.idea/
+.DS_Store

@@ -186,13 +186,13 @@ body {
 /* Layout Columns */
 .dashboard-grid {
   display: grid;
-  grid-template-cols: 1fr;
+  grid-template-columns: 1fr;
   gap: 24px;
 }
 
 @media (min-width: 1024px) {
   .dashboard-grid {
-    grid-template-cols: 300px 1fr 340px;
+    grid-template-columns: 300px 1fr 340px;
   }
 }
 
@@ -749,4 +749,32 @@ input:checked + .slider:before {
 @keyframes audio-bounce {
   0% { height: 4px; }
   100% { height: 32px; }
+}
+
+/* Joint Sliders Styling */
+.joint-slider {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  outline: none;
+  margin-top: 8px;
+}
+
+.joint-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--primary);
+  cursor: pointer;
+  box-shadow: 0 0 8px rgba(0, 240, 255, 0.4);
+  transition: all 0.2s;
+}
+
+.joint-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+  box-shadow: 0 0 12px rgba(0, 240, 255, 0.6);
 }

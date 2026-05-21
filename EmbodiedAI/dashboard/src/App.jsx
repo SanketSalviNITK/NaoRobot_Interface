@@ -1,4 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
+import { Canvas } from '@react-three/fiber';
+import NaoModel from './NaoModel';
 import { 
   Activity, Cpu, Sliders, Volume2, VolumeX, Eye, EyeOff, 
   Mic, MicOff, Database, Sparkles, Shield, HardDrive, 
@@ -28,18 +30,20 @@ export default function App() {
 
   // 5. Kinetic Motions Module States
   const [activeMotion, setActiveMotion] = useState('');
-  const [jointAngles, setJointAngles] = useState({
-    headYaw: 0.0,
-    shoulderPitch: 85.4,
-    elbowRoll: -24.6,
-    hipPitch: -4.2
-  });
+  const [joints, setJoints] = useState({});
+  const [showJoints, setShowJoints] = useState(false);
 
   // 6. Live Telemetry State
   const [battery, setBattery] = useState(88);
   const [jointTemp, setJointTemp] = useState(38.4);
   const [latency, setLatency] = useState(12);
   const [inferenceTime, setInferenceTime] = useState(1.42);
+
+  // 6.5. Telemetry Connection Mode
+  const [telemetryMode, setTelemetryMode] = useState('offline');
+
+  // RAG Files State
+  const [uploadedFiles, setUploadedFiles] = useState([]);
 
   // 7. Chat Console State
   const [messages, setMessages] = useState([
@@ -56,26 +60,17 @@ export default function App() {
 
   const chatEndRef = useRef(null);
   const logsEndRef = useRef(null);
+  const fileInputRef = useRef(null);
 
-  // Fluctuating Telemetry & Joints Effect
+  // Fluctuating Telemetry Effect
   useEffect(() => {
     const interval = setInterval(() => {
       setLatency(prev => Math.max(8, Math.min(20, prev + (Math.random() > 0.5 ? 1 : -1))));
       setJointTemp(prev => Math.max(37, Math.min(42, prev + parseFloat((Math.random() * 0.2 - 0.1).toFixed(2)))));
       setInferenceTime(prev => Math.max(1.1, Math.min(1.9, prev + parseFloat((Math.random() * 0.1 - 0.05).toFixed(2)))));
-
-      // Tiny natural fluctuating micro-movements (Autonomous Life!)
-      if (lifeState) {
-        setJointAngles(prev => ({
-          headYaw: parseFloat((prev.headYaw + (Math.random() * 0.8 - 0.4)).toFixed(1)),
-          shoulderPitch: parseFloat((prev.shoulderPitch + (Math.random() * 0.6 - 0.3)).toFixed(1)),
-          elbowRoll: parseFloat((prev.elbowRoll + (Math.random() * 0.8 - 0.4)).toFixed(1)),
-          hipPitch: parseFloat((prev.hipPitch + (Math.random() * 0.4 - 0.2)).toFixed(1))
-        }));
-      }
     }, 3000);
     return () => clearInterval(interval);
-  }, [lifeState]);
+  }, []);
 
   // Scroll helpers
   useEffect(() => {
@@ -93,42 +88,77 @@ export default function App() {
     setLogs(prev => [...prev, { id: Date.now(), time: timeStr, level, text }]);
   };
 
+  // Fast Telemetry Polling (10Hz)
+  useEffect(() => {
+    const fetchTelemetry = () => {
+      fetch('http://localhost:5002/telemetry')
+        .then(res => res.json())
+        .then(data => {
+          setTelemetryMode(data.mode); // 'live' or 'mock'
+          if (data.joints) {
+            setJoints(data.joints);
+          }
+          if (data.battery !== undefined && data.battery !== 0) {
+            setBattery(data.battery);
+          }
+          if (data.temperature !== undefined && data.temperature !== 0) {
+            setJointTemp(data.temperature);
+          }
+        })
+        .catch(() => {
+          setTelemetryMode('offline');
+        });
+    };
+    
+    fetchTelemetry();
+    const interval = setInterval(fetchTelemetry, 100); // 10Hz
+    return () => clearInterval(interval);
+  }, []);
+
   // Speech Recognition Mic Click Handler
   const handleMicClick = () => {
     if (isListening) {
-      setIsListening(false);
-      addLog('warn', 'Voice Recognition: Continuous ingestion capture manually aborted');
+      addLog('warn', 'Voice Recognition: Already listening for input...');
       return;
     }
 
     setIsListening(true);
     setSpeechConfidence(0);
-    addLog('info', 'Voice Ingestion: Continuous capture active... Capturing audio stream');
-
-    // Simulate vocal recording and automatic transcription timeout
-    setTimeout(() => {
-      setIsListening(false);
-      setSpeechConfidence(96.4);
-      
-      const recognizedText = "Wave hand and check health status";
-      addLog('info', `Whisper STT: Audio transcribed (confidence: 96.4%)`);
-      
-      const userMsg = { id: Date.now(), sender: 'user', text: `[Voice Command] "${recognizedText}"` };
-      setMessages(prev => [...prev, userMsg]);
-      
-      // Dispatch motion response
-      setTimeout(() => {
-        setMessages(prev => [...prev, {
-          id: Date.now() + 1,
-          sender: 'bot',
-          text: 'Vocal command recognized! Calibrating kinetic posture and executing high wave sequence.',
-          gesture: 'wave'
-        }]);
-        triggerMotion('wave');
-        addLog('info', 'Speech Synthesis: Auditory feedback dispatched through side speakers');
-      }, 1000);
-
-    }, 3000);
+    addLog('info', 'Voice Ingestion: Activating Laptop Microphone... Please speak now.');
+    
+    fetch('http://localhost:5002/voice/listen', { method: 'POST' })
+      .then(res => res.json())
+      .then(data => {
+        setIsListening(false);
+        if (data.status === 'success') {
+          setSpeechConfidence(98.5); // Visual confidence score
+          const recognizedText = data.recognized_text;
+          addLog('info', `Google STT (en-IN): Audio transcribed: "${recognizedText}"`);
+          
+          const userMsg = { id: Date.now(), sender: 'user', text: `[Voice] "${recognizedText}"` };
+          setMessages(prev => [...prev, userMsg]);
+          
+          // The backend already dispatches the physical motion to the bridge, we just update the chat UI
+          setMessages(prev => [...prev, {
+            id: Date.now() + 1,
+            sender: 'bot',
+            text: data.speech,
+            gesture: data.gesture !== 'none' ? data.gesture : null
+          }]);
+          
+          if (data.gesture !== 'none') {
+             addLog('info', `Actuator Module: AI decided on motion [${data.gesture}]`);
+             setActiveMotion(data.gesture);
+             setTimeout(() => setActiveMotion(''), 800);
+          }
+        } else {
+          addLog('error', `Voice processing error: ${data.message || 'Unknown error'}`);
+        }
+      })
+      .catch(err => {
+        setIsListening(false);
+        addLog('error', `Voice fetch error: ${err.message}`);
+      });
   };
 
   // Dispatch text commands
@@ -139,36 +169,27 @@ export default function App() {
     const userMsg = { id: Date.now(), sender: 'user', text: inputText };
     setMessages(prev => [...prev, userMsg]);
     addLog('info', `Dispatched speech command: "${inputText}"`);
+    const sentText = inputText;
     setInputText('');
 
-    // Mock AI reply loop
-    setTimeout(() => {
-      let botResponse = 'Command processed. System links are functioning optimally.';
-      let mockGesture = 'explain';
-
-      if (inputText.toLowerCase().includes('hello') || inputText.toLowerCase().includes('hi')) {
-        botResponse = 'Hello! I am NAO, your embodied intelligence platform. My motors are fully calibrated.';
-        mockGesture = 'wave';
-      } else if (inputText.toLowerCase().includes('help') || inputText.toLowerCase().includes('documentation')) {
-        botResponse = 'Accessing knowledge libraries... Local RAG database indicates fallbacks are set to off.';
-        mockGesture = 'thinking';
-      } else if (inputText.toLowerCase().includes('status') || inputText.toLowerCase().includes('health')) {
-        botResponse = `Diagnostics report: Battery is at ${battery}%, joint temperatures are stable at ${jointTemp.toFixed(1)}°C.`;
-        mockGesture = 'check';
-      }
-
+    fetch('http://localhost:5002/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: sentText, rag_mode: ragMode })
+    })
+    .then(res => res.json())
+    .then(data => {
       setMessages(prev => [...prev, {
         id: Date.now() + 1,
         sender: 'bot',
-        text: botResponse,
-        gesture: gesturesEnabled ? mockGesture : null
+        text: data.speech || "No response received.",
+        gesture: data.gesture !== 'none' ? data.gesture : null
       }]);
-      
-      if (gesturesEnabled) {
-        triggerMotion(mockGesture);
-      }
-      addLog('info', `Speech synthesis complete. Triggered gesture: ${mockGesture}`);
-    }, 1000);
+      addLog('info', `Speech synthesis complete. Triggered gesture: ${data.gesture}`);
+    })
+    .catch(err => {
+      addLog('error', `Chat relay error: ${err.message}`);
+    });
   };
 
   // Kinetic Motion Trigger
@@ -176,29 +197,21 @@ export default function App() {
     setActiveMotion(motionKey);
     addLog('info', `Actuator Module: Dispatching motion trigger [${motionKey}] to ALMotion`);
 
-    // Calibrate mock joint angle indicators based on the gesture clicked!
-    setTimeout(() => {
-      if (motionKey === 'stand') {
-        setJointAngles({ headYaw: 0.0, shoulderPitch: -10.5, elbowRoll: -12.4, hipPitch: 0.0 });
-        addLog('info', 'MotInfo: Posture [StandUp] execution verified by joint encoders');
-      } else if (motionKey === 'sit') {
-        setJointAngles({ headYaw: 0.0, shoulderPitch: 82.3, elbowRoll: -22.5, hipPitch: -74.2 });
-        addLog('info', 'MotInfo: Posture [SitDown] execution verified by joint encoders');
-      } else if (motionKey === 'relax') {
-        setJointAngles({ headYaw: 0.0, shoulderPitch: 88.2, elbowRoll: -8.4, hipPitch: -80.6 });
-        addLog('info', 'MotInfo: Posture [Relax] execution verified by joint encoders');
-      } else if (motionKey === 'wave') {
-        setJointAngles(prev => ({ ...prev, shoulderPitch: -65.2, elbowRoll: 42.6 }));
-        addLog('info', 'MotInfo: Gesture [WaveHand] execution complete');
-      } else if (motionKey === 'thinking') {
-        setJointAngles(prev => ({ ...prev, headYaw: -14.2, shoulderPitch: 45.3 }));
-        addLog('info', 'MotInfo: Gesture [Thinking] execution complete');
-      } else if (motionKey === 'bow') {
-        setJointAngles(prev => ({ ...prev, hipPitch: -32.4 }));
-        addLog('info', 'MotInfo: Gesture [Bowing] execution complete');
-      }
+    fetch('http://localhost:5002/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: motionKey })
+    })
+    .then(() => {
+      setTimeout(() => {
+        addLog('info', `MotInfo: Actuator sequence [${motionKey}] dispatched to stream.`);
+        setActiveMotion('');
+      }, 800);
+    })
+    .catch(err => {
+      addLog('error', `Command relay error: ${err.message}`);
       setActiveMotion('');
-    }, 800);
+    });
   };
 
   const handleToggle = (name, setter, val) => {
@@ -206,13 +219,41 @@ export default function App() {
     addLog('warn', `System configured: Changed "${name}" parameter to ${!val ? 'ON' : 'OFF'}`);
   };
 
-  const handleFileUpload = () => {
-    addLog('info', 'Cognitive Engine: Parsing drag-and-drop document upload...');
-    setTimeout(() => {
-      addLog('info', 'Cognitive Engine: Document segmented into 24 chunks');
-      addLog('info', 'Cognitive Engine: ChromaDB vector embeddings created successfully!');
-      setRagMode(true);
-    }, 1200);
+  const handleFileUploadClick = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    addLog('info', `Cognitive Engine: Uploading document ${file.name}...`);
+    
+    const formData = new FormData();
+    formData.append('file', file);
+
+    fetch('http://localhost:5002/upload_doc', {
+      method: 'POST',
+      body: formData
+    })
+    .then(res => res.json())
+    .then(data => {
+      if (data.status === 'success') {
+        addLog('info', `Cognitive Engine: Document segmented and embedded successfully (${data.chunks} chunks)!`);
+        setRagMode(true);
+        setUploadedFiles(prev => [...prev, { name: data.filename, size: data.size || 'Unknown', chunks: data.chunks }]);
+      } else {
+        addLog('error', `Cognitive Engine: Upload failed: ${data.message}`);
+      }
+    })
+    .catch(err => {
+      addLog('error', `Cognitive Engine: Network error during upload: ${err.message}`);
+    });
+    
+    // Reset input
+    e.target.value = null;
   };
 
   return (
@@ -289,7 +330,37 @@ export default function App() {
             </div>
           </div>
 
-          {/* NEW: Kinetic Motions Module Panel */}
+          {/* Telemetry Stream Integration Panel */}
+          <div className="glass-panel" style={{ border: telemetryMode === 'live' ? '1px solid rgba(0, 240, 255, 0.3)' : '1px solid rgba(255, 255, 255, 0.05)', transition: 'border 0.3s ease' }}>
+            <div className="panel-header">
+              <div className="panel-title">
+                <Database size={16} className={telemetryMode === 'live' ? "cyan" : "gray"} style={{ animation: telemetryMode === 'live' ? 'pulse-cyan 2s infinite' : 'none' }} />
+                <h3>Joint Telemetry Stream</h3>
+              </div>
+              <span className="panel-subtitle" style={{ color: telemetryMode === 'live' ? 'var(--primary)' : '#888' }}>
+                {telemetryMode.toUpperCase()}
+              </span>
+            </div>
+
+            <div className="telemetry-card" style={{ padding: '10px', display: 'flex', flexDirection: 'column', gap: '10px', background: 'transparent' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span className="telemetry-label" style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Bridge Polling</span>
+                <span style={{ 
+                  fontSize: '9px', 
+                  fontFamily: 'var(--font-mono)', 
+                  padding: '2px 6px', 
+                  borderRadius: '4px',
+                  background: telemetryMode === 'live' ? 'rgba(0, 255, 170, 0.1)' : 'rgba(255, 170, 0, 0.1)',
+                  color: telemetryMode === 'live' ? '#00ffa6' : '#ffaa00',
+                  border: telemetryMode === 'live' ? '1px solid rgba(0, 255, 170, 0.2)' : '1px solid rgba(255, 170, 0, 0.2)'
+                }}>
+                  {telemetryMode === 'live' ? "ACTIVE (10Hz)" : telemetryMode === 'mock' ? "MOCK (10Hz)" : "OFFLINE"}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Kinetic Motions Module Panel */}
           <div className="glass-panel kinetic-motion-panel">
             <div className="panel-header">
               <div className="panel-title">
@@ -299,25 +370,7 @@ export default function App() {
               <span className="panel-subtitle" style={{ color: 'var(--secondary)' }}>ALMotion</span>
             </div>
 
-            {/* Live Joint Position Indicators */}
-            <div className="joint-monitor-grid">
-              <div className="joint-card">
-                <span className="joint-name">Head Yaw</span>
-                <span className="joint-angle-value">{jointAngles.headYaw.toFixed(1)}°</span>
-              </div>
-              <div className="joint-card">
-                <span className="joint-name">L-Shoulder Pitch</span>
-                <span className="joint-angle-value">{jointAngles.shoulderPitch.toFixed(1)}°</span>
-              </div>
-              <div className="joint-card">
-                <span className="joint-name">L-Elbow Roll</span>
-                <span className="joint-angle-value">{jointAngles.elbowRoll.toFixed(1)}°</span>
-              </div>
-              <div className="joint-card">
-                <span className="joint-name">L-Hip Pitch</span>
-                <span className="joint-angle-value">{jointAngles.hipPitch.toFixed(1)}°</span>
-              </div>
-            </div>
+            {/* Note: Manual sliders removed. UI is now fully data-driven by the backend telemetry stream. */}
 
             {/* Posture Controls */}
             <div className="motion-category">
@@ -364,14 +417,55 @@ export default function App() {
         </section>
 
         {/* ================= MIDDLE COLUMN: INTERACTIVE CONSOLE ================= */}
-        <section className="console-col">
-          <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <section className="console-col" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+          
+          {/* 3D Model Viewer Canvas */}
+          <div className="glass-panel" style={{ flex: '1 1 55%', minHeight: '400px', display: 'flex', flexDirection: 'column', position: 'relative', padding: 0, overflow: 'hidden' }}>
+            <div className="panel-header" style={{ position: 'absolute', top: '15px', left: '15px', zIndex: 10, background: 'rgba(10,15,20,0.6)', padding: '5px 10px', borderRadius: '8px', border: '1px solid rgba(0, 200, 255, 0.2)' }}>
+              <div className="panel-title">
+                <Eye size={16} className="cyan" />
+                <h3 style={{ margin: 0, fontSize: '12px' }}>Interactive Digital Twin</h3>
+              </div>
+            </div>
+            
+            <Canvas camera={{ position: [0, 0.3, 1.2], fov: 45 }} style={{ width: '100%', height: '100%', background: 'linear-gradient(to bottom, rgba(0,20,30,0.5), rgba(0,10,15,0.8))' }}>
+              <Suspense fallback={null}>
+                <NaoModel joints={joints} />
+              </Suspense>
+            </Canvas>
+
+            {/* Collapsible Motor Encoders Overlay */}
+            <div style={{ position: 'absolute', top: '15px', right: '15px', zIndex: 10, background: 'rgba(10,15,20,0.8)', padding: '10px', borderRadius: '8px', border: '1px solid rgba(0, 200, 255, 0.2)', maxWidth: '200px', minWidth: '160px', backdropFilter: 'blur(4px)' }}>
+              <div 
+                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', borderBottom: showJoints ? '1px solid rgba(255,255,255,0.1)' : 'none', paddingBottom: showJoints ? '8px' : '0', marginBottom: showJoints ? '8px' : '0' }} 
+                onClick={() => setShowJoints(!showJoints)}
+              >
+                <span style={{ fontSize: '10px', fontWeight: 'bold', color: 'var(--primary)', letterSpacing: '1px' }}>MOTOR ENCODERS</span>
+                {showJoints ? <ChevronsUp size={14} className="cyan" /> : <ChevronsDown size={14} className="cyan" />}
+              </div>
+              {showJoints && (
+                <div style={{ maxHeight: '250px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px', paddingRight: '4px' }} className="custom-scrollbar">
+                  {Object.keys(joints).length > 0 ? (
+                    Object.keys(joints).map(joint => (
+                      <div key={joint} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', fontFamily: 'var(--font-mono)' }}>
+                        <span style={{ color: '#ccc' }}>{joint}</span>
+                        <span style={{ color: '#00ffa6', fontWeight: 'bold' }}>{(joints[joint] * (180 / Math.PI)).toFixed(1)}°</span>
+                      </div>
+                    ))
+                  ) : (
+                    <span style={{ fontSize: '10px', color: '#888' }}>No data stream</span>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="glass-panel" style={{ flex: '1 1 45%', display: 'flex', flexDirection: 'column' }}>
             <div className="panel-header">
               <div className="panel-title">
                 <Sliders size={16} className="cyan" />
-                <h3>Dialogue & RAG Controller</h3>
+                <h3>Dialogue Controller</h3>
               </div>
-              <span className="panel-subtitle">Neural Interface</span>
             </div>
 
             {/* NEW: Speech Recognition panel */}
@@ -407,7 +501,7 @@ export default function App() {
             </div>
 
             {/* Scrolling Chat Box */}
-            <div className="chat-box">
+            <div className="chat-box" style={{ flex: 1, minHeight: '120px' }}>
               {messages.map((msg) => (
                 <div key={msg.id} className={`chat-bubble ${msg.sender}`}>
                   <span className="bubble-sender">{msg.sender === 'bot' ? '🤖 NAO qi' : '👤 Operator'}</span>
@@ -437,19 +531,12 @@ export default function App() {
                 Send
               </button>
             </form>
-
-            {/* RAG Drop Zone */}
-            <div className="rag-upload-zone" onClick={handleFileUpload}>
-              <UploadCloud size={24} className="rag-icon" />
-              <div className="rag-title">Drag & Drop Knowledge Base</div>
-              <div className="rag-desc">Upload PDF / TXT manuals to enhance local RAG search index</div>
-            </div>
           </div>
         </section>
 
         {/* ================= RIGHT COLUMN: BEHAVIOR MATRIX ================= */}
         <section className="toggles-col">
-          <div className="glass-panel" style={{ flex: 1 }}>
+          <div className="glass-panel" style={{ flex: '0 0 auto' }}>
             <div className="panel-header">
               <div className="panel-title">
                 <Cpu size={16} className="cyan" />
@@ -569,6 +656,76 @@ export default function App() {
               </div>
 
             </div>
+          </div>
+
+          {/* RAG Knowledge Base Panel */}
+          <div className="glass-panel" style={{ marginTop: '15px', display: 'flex', flexDirection: 'column', maxHeight: '280px' }}>
+            <div className="panel-header">
+              <div className="panel-title">
+                <Database size={16} className="cyan" />
+                <h3>RAG Knowledge Base</h3>
+              </div>
+              <span className="panel-subtitle">Vector DB</span>
+            </div>
+            
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              style={{ display: 'none' }} 
+              onChange={handleFileChange} 
+              accept=".pdf,.txt"
+            />
+            <div 
+              className="rag-upload-container" 
+              onClick={handleFileUploadClick}
+              style={{
+                border: '1px dashed rgba(0, 200, 255, 0.3)',
+                borderRadius: '8px',
+                padding: '20px',
+                textAlign: 'center',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '10px',
+                cursor: 'pointer',
+                marginTop: '10px',
+                background: 'rgba(0, 200, 255, 0.05)',
+                transition: 'all 0.3s ease',
+                flexShrink: 0
+              }}
+            >
+              <UploadCloud size={24} className="cyan" />
+              <span style={{ fontSize: '12px', fontWeight: 'bold', color: '#fff' }}>Upload PDF / TXT Manuals</span>
+              <span style={{ fontSize: '10px', color: '#888' }}>Click to trigger cognitive ingestion</span>
+            </div>
+
+            {uploadedFiles.length > 0 && (
+              <div style={{ marginTop: '15px', overflowY: 'auto', flexGrow: 1, paddingRight: '5px' }} className="custom-scrollbar">
+                <span style={{ fontSize: '10px', fontWeight: 'bold', color: 'var(--primary)', letterSpacing: '1px', marginBottom: '8px', display: 'block' }}>INGESTED DOCUMENTS</span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {uploadedFiles.map((file, idx) => (
+                    <div key={idx} style={{ 
+                      background: 'rgba(255,255,255,0.03)', 
+                      border: '1px solid rgba(255,255,255,0.1)', 
+                      borderRadius: '6px', 
+                      padding: '8px 10px',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Database size={14} className="cyan" />
+                        <span style={{ fontSize: '11px', color: '#ddd' }}>{file.name}</span>
+                      </div>
+                      <div style={{ display: 'flex', gap: '10px', fontSize: '9px', color: '#888', fontFamily: 'var(--font-mono)' }}>
+                        <span>{file.chunks} CHUNKS</span>
+                        <span>{file.size}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </section>
 
