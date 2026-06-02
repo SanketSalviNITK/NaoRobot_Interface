@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef, Suspense } from 'react';
 import { Canvas } from '@react-three/fiber';
 import NaoModel from './NaoModel';
+import PresentationSandbox from './components/PresentationSandbox';
 import { 
   Activity, Cpu, Sliders, Volume2, VolumeX, Eye, EyeOff, 
   Mic, MicOff, Database, Sparkles, Shield, HardDrive, 
   Bell, Send, UploadCloud, BatteryCharging, Wifi, 
   ChevronsUp, ChevronsDown, Move, Speech, HelpCircle, 
-  Volume, AlertCircle
+  Volume, AlertCircle, Trash2
 } from 'lucide-react';
 
 export default function App() {
@@ -22,7 +23,7 @@ export default function App() {
 
   // 3. Sensory & Feedback Toggles
   const [ledFeedback, setLedFeedback] = useState(true);
-  const [audioVolume, setAudioVolume] = useState(true);
+  const [robotVolume, setRobotVolume] = useState(50);
 
   // 4. Speech Recognition States
   const [isListening, setIsListening] = useState(false);
@@ -42,6 +43,16 @@ export default function App() {
   // 6.5. Telemetry Connection Mode
   const [telemetryMode, setTelemetryMode] = useState('offline');
 
+  // Sandbox Mode State
+  const [sandboxMode, setSandboxMode] = useState(false);
+
+  // Twin Connection State
+  const [twinConnected, setTwinConnected] = useState(true);
+  const twinConnectedRef = useRef(twinConnected);
+  useEffect(() => {
+    twinConnectedRef.current = twinConnected;
+  }, [twinConnected]);
+
   // RAG Files State
   const [uploadedFiles, setUploadedFiles] = useState([]);
 
@@ -50,6 +61,7 @@ export default function App() {
     { id: 1, sender: 'bot', text: 'Holographic interface stabilized. I am ready to assist.', gesture: 'explain' },
   ]);
   const [inputText, setInputText] = useState('');
+  const [fullScreenImage, setFullScreenImage] = useState(null);
 
   // 8. Real-time Logs State
   const [logs, setLogs] = useState([
@@ -95,7 +107,7 @@ export default function App() {
         .then(res => res.json())
         .then(data => {
           setTelemetryMode(data.mode); // 'live' or 'mock'
-          if (data.joints) {
+          if (data.joints && twinConnectedRef.current) {
             setJoints(data.joints);
           }
           if (data.battery !== undefined && data.battery !== 0) {
@@ -115,6 +127,20 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  // Fetch initial ingested docs
+  useEffect(() => {
+    fetch('http://localhost:5002/docs')
+      .then(res => res.json())
+      .then(data => {
+        if (data.status === 'success' && data.documents) {
+          const loadedDocs = data.documents.map(d => ({ ...d, active: true }));
+          setUploadedFiles(loadedDocs);
+          if (loadedDocs.length > 0) setRagMode(true);
+        }
+      })
+      .catch(err => addLog('error', `Failed to fetch existing documents: ${err.message}`));
+  }, []);
+
   // Speech Recognition Mic Click Handler
   const handleMicClick = () => {
     if (isListening) {
@@ -126,7 +152,13 @@ export default function App() {
     setSpeechConfidence(0);
     addLog('info', 'Voice Ingestion: Activating Laptop Microphone... Please speak now.');
     
-    fetch('http://localhost:5002/voice/listen', { method: 'POST' })
+    const activeDocs = uploadedFiles.filter(f => f.active).map(f => f.name);
+
+    fetch('http://localhost:5002/voice/listen', { 
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ active_docs: activeDocs })
+    })
       .then(res => res.json())
       .then(data => {
         setIsListening(false);
@@ -143,7 +175,8 @@ export default function App() {
             id: Date.now() + 1,
             sender: 'bot',
             text: data.speech,
-            gesture: data.gesture !== 'none' ? data.gesture : null
+            gesture: data.gesture !== 'none' ? data.gesture : null,
+            source_images: data.source_images || []
           }]);
           
           if (data.gesture !== 'none') {
@@ -162,20 +195,26 @@ export default function App() {
   };
 
   // Dispatch text commands
-  const handleSendMessage = (e) => {
-    e.preventDefault();
-    if (!inputText.trim()) return;
+  const handleSendMessage = (e, customText = null) => {
+    if (e && e.preventDefault) e.preventDefault();
+    
+    const textToSend = typeof customText === 'string' ? customText : inputText;
+    if (!textToSend.trim()) return;
 
-    const userMsg = { id: Date.now(), sender: 'user', text: inputText };
+    const userMsg = { id: Date.now(), sender: 'user', text: textToSend };
     setMessages(prev => [...prev, userMsg]);
-    addLog('info', `Dispatched speech command: "${inputText}"`);
-    const sentText = inputText;
-    setInputText('');
+    addLog('info', `Dispatched speech command: "${textToSend}"`);
+    
+    if (typeof customText !== 'string') {
+      setInputText('');
+    }
+
+    const activeDocs = uploadedFiles.filter(f => f.active).map(f => f.name);
 
     fetch('http://localhost:5002/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: sentText, rag_mode: ragMode })
+      body: JSON.stringify({ text: textToSend, rag_mode: ragMode, active_docs: activeDocs })
     })
     .then(res => res.json())
     .then(data => {
@@ -183,7 +222,8 @@ export default function App() {
         id: Date.now() + 1,
         sender: 'bot',
         text: data.speech || "No response received.",
-        gesture: data.gesture !== 'none' ? data.gesture : null
+        gesture: data.gesture !== 'none' ? data.gesture : null,
+        source_images: data.source_images || []
       }]);
       addLog('info', `Speech synthesis complete. Triggered gesture: ${data.gesture}`);
     })
@@ -209,14 +249,65 @@ export default function App() {
       }, 800);
     })
     .catch(err => {
-      addLog('error', `Command relay error: ${err.message}`);
-      setActiveMotion('');
+      // In sandbox mode, it's expected to fail if minimal_ai isn't running
+      if (!sandboxMode) {
+        addLog('error', `Command relay error: ${err.message}`);
+      } else {
+        setTimeout(() => setActiveMotion(''), 800);
+      }
+    });
+  };
+
+  const handleVolumeChange = (e) => {
+    const vol = parseInt(e.target.value, 10);
+    setRobotVolume(vol);
+    fetch('http://localhost:5002/volume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ volume: vol })
+    })
+    .then(res => res.json())
+    .then(data => {
+       if (data.status === 'success') {
+         addLog('info', `Volume adjusted to ${vol}%`);
+       }
+    })
+    .catch(err => {
+       addLog('error', `Failed to set volume: ${err.message}`);
     });
   };
 
   const handleToggle = (name, setter, val) => {
-    setter(!val);
-    addLog('warn', `System configured: Changed "${name}" parameter to ${!val ? 'ON' : 'OFF'}`);
+    const newState = !val;
+    setter(newState);
+    
+    let featureKey = "";
+    if (name === "Autonomous Life") featureKey = "autonomous_life";
+    else if (name === "Basic Awareness") featureKey = "basic_awareness";
+    // We can add fall protection and led cues here later when implemented
+    
+    if (featureKey) {
+      fetch('http://localhost:5002/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ feature: featureKey, state: newState })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if(data.status === 'success' || data.status === 'ok') {
+           addLog('warn', `System configured: "${name}" changed to ${newState ? 'ON' : 'OFF'} [HARDWARE SYNCED]`);
+        } else {
+           addLog('error', `Hardware sync failed for ${name}: ${data.reason || data.message}`);
+           setter(val); // Revert state on failure
+        }
+      })
+      .catch(err => {
+        addLog('error', `Network error syncing ${name}: ${err.message}`);
+        setter(val); // Revert state on failure
+      });
+    } else {
+      addLog('warn', `System configured: Changed "${name}" parameter to ${newState ? 'ON' : 'OFF'}`);
+    }
   };
 
   const handleFileUploadClick = () => {
@@ -243,7 +334,7 @@ export default function App() {
       if (data.status === 'success') {
         addLog('info', `Cognitive Engine: Document segmented and embedded successfully (${data.chunks} chunks)!`);
         setRagMode(true);
-        setUploadedFiles(prev => [...prev, { name: data.filename, size: data.size || 'Unknown', chunks: data.chunks }]);
+        setUploadedFiles(prev => [...prev, { name: data.filename, size: data.size || 'Unknown', chunks: data.chunks, active: true }]);
       } else {
         addLog('error', `Cognitive Engine: Upload failed: ${data.message}`);
       }
@@ -256,6 +347,39 @@ export default function App() {
     e.target.value = null;
   };
 
+  const toggleDocActive = (idx) => {
+    const docName = uploadedFiles[idx].name;
+    const newState = !uploadedFiles[idx].active;
+    addLog('info', `Cognitive Engine: Context visibility for ${docName} set to ${newState ? 'ACTIVE' : 'INACTIVE'}`);
+    
+    setUploadedFiles(prev => {
+      const updated = [...prev];
+      updated[idx] = { ...updated[idx], active: newState };
+      return updated;
+    });
+  };
+
+  const handleDeleteDoc = (idx) => {
+    const docToDelete = uploadedFiles[idx];
+    addLog('warn', `Cognitive Engine: Initiating memory purge for ${docToDelete.name}...`);
+    
+    fetch('http://localhost:5002/delete_doc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: docToDelete.name })
+    })
+    .then(res => res.json())
+    .then(data => {
+      if (data.status === 'success') {
+        addLog('info', `Cognitive Engine: Purge successful. Vector DB chunks for ${docToDelete.name} destroyed.`);
+        setUploadedFiles(prev => prev.filter((_, i) => i !== idx));
+      } else {
+        addLog('error', `Cognitive Engine: Purge failed: ${data.message}`);
+      }
+    })
+    .catch(err => addLog('error', `Cognitive Engine: Network error during purge: ${err.message}`));
+  };
+
   return (
     <div className="dashboard-container">
       {/* 🚀 HUD TOP HEADER */}
@@ -265,6 +389,13 @@ export default function App() {
           <h1 className="hud-title">NAO Autonomous Dashboard</h1>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+          <button 
+            className={`motion-action-btn ${sandboxMode ? 'active' : ''}`}
+            onClick={() => setSandboxMode(!sandboxMode)}
+            style={{ padding: '6px 12px', fontSize: '12px', border: '1px solid var(--primary)', borderRadius: '4px', background: sandboxMode ? 'var(--primary)' : 'transparent', color: sandboxMode ? '#000' : 'var(--primary)', cursor: 'pointer' }}
+          >
+            {sandboxMode ? 'Exit Presentation Mode' : 'Presentation Mode'}
+          </button>
           <div className="hud-status-badge">
             <span className="status-dot"></span>
             SYS LINK: ONLINE
@@ -277,11 +408,12 @@ export default function App() {
       </header>
 
       {/* 📊 MAIN DASHBOARD GRID */}
-      <main className="dashboard-grid">
+      <main className="dashboard-grid" style={{ gridTemplateColumns: sandboxMode ? '1fr 1fr' : '300px 1fr 300px' }}>
         
         {/* ================= LEFT COLUMN: TELEMETRY & MOTIONS ================= */}
-        <section className="telemetry-col">
-          {/* Telemetry Panel */}
+        {!sandboxMode && (
+          <section className="telemetry-col">
+            {/* Telemetry Panel */}
           <div className="glass-panel">
             <div className="panel-header">
               <div className="panel-title">
@@ -379,7 +511,8 @@ export default function App() {
                 {[
                   { name: 'Stand Up', key: 'stand' },
                   { name: 'Sit Down', key: 'sit' },
-                  { name: 'Relax', key: 'relax' }
+                  { name: 'Crouch', key: 'crouch' },
+                  { name: 'Bow', key: 'bow' }
                 ].map((act) => (
                   <button 
                     key={act.key} 
@@ -396,11 +529,18 @@ export default function App() {
             {/* Gestural Controls */}
             <div className="motion-category">
               <span className="category-title">Social Gestures</span>
-              <div className="motion-buttons-grid">
+              <div className="motion-buttons-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
                 {[
-                  { name: 'Wave Hand', key: 'wave' },
-                  { name: 'Thinking', key: 'thinking' },
-                  { name: 'Bowing', key: 'bow' }
+                  { name: 'Wave', key: 'wave_right_hand' },
+                  { name: 'Cheer', key: 'cheer' },
+                  { name: 'Shrug', key: 'shrug' },
+                  { name: 'Facepalm', key: 'facepalm' },
+                  { name: 'Deny', key: 'deny' },
+                  { name: 'Present', key: 'present' },
+                  { name: 'Beckon', key: 'beckon' },
+                  { name: 'Point L', key: 'point_left' },
+                  { name: 'Point R', key: 'point_right' },
+                  { name: 'Thinking', key: 'thinking' }
                 ].map((act) => (
                   <button 
                     key={act.key} 
@@ -415,6 +555,7 @@ export default function App() {
             </div>
           </div>
         </section>
+        )}
 
         {/* ================= MIDDLE COLUMN: INTERACTIVE CONSOLE ================= */}
         <section className="console-col" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
@@ -422,9 +563,27 @@ export default function App() {
           {/* 3D Model Viewer Canvas */}
           <div className="glass-panel" style={{ flex: '1 1 55%', minHeight: '400px', display: 'flex', flexDirection: 'column', position: 'relative', padding: 0, overflow: 'hidden' }}>
             <div className="panel-header" style={{ position: 'absolute', top: '15px', left: '15px', zIndex: 10, background: 'rgba(10,15,20,0.6)', padding: '5px 10px', borderRadius: '8px', border: '1px solid rgba(0, 200, 255, 0.2)' }}>
-              <div className="panel-title">
-                <Eye size={16} className="cyan" />
-                <h3 style={{ margin: 0, fontSize: '12px' }}>Interactive Digital Twin</h3>
+              <div className="panel-title" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                  <Eye size={16} className="cyan" />
+                  <h3 style={{ margin: 0, fontSize: '12px' }}>Interactive Digital Twin</h3>
+                </div>
+                <button 
+                  onClick={() => setTwinConnected(!twinConnected)}
+                  style={{
+                    background: twinConnected ? 'rgba(0, 255, 166, 0.2)' : 'rgba(255, 50, 50, 0.2)',
+                    border: `1px solid ${twinConnected ? '#00ffa6' : '#ff3232'}`,
+                    color: twinConnected ? '#00ffa6' : '#ff3232',
+                    padding: '2px 8px',
+                    borderRadius: '4px',
+                    fontSize: '10px',
+                    cursor: 'pointer',
+                    fontWeight: 'bold',
+                    marginLeft: '8px'
+                  }}
+                >
+                  {twinConnected ? 'CONNECTED' : 'DISCONNECTED'}
+                </button>
               </div>
             </div>
             
@@ -460,6 +619,7 @@ export default function App() {
             </div>
           </div>
 
+          {!sandboxMode && (
           <div className="glass-panel" style={{ flex: '1 1 45%', display: 'flex', flexDirection: 'column' }}>
             <div className="panel-header">
               <div className="panel-title">
@@ -532,9 +692,11 @@ export default function App() {
               </button>
             </form>
           </div>
+          )}
         </section>
 
-        {/* ================= RIGHT COLUMN: BEHAVIOR MATRIX ================= */}
+        {/* ================= RIGHT COLUMN: BEHAVIOR MATRIX OR SANDBOX ================= */}
+        {!sandboxMode ? (
         <section className="toggles-col">
           <div className="glass-panel" style={{ flex: '0 0 auto' }}>
             <div className="panel-header">
@@ -639,19 +801,23 @@ export default function App() {
 
               {/* Audio Volume */}
               <div className="toggle-card">
-                <div className="toggle-row">
+                <div className="toggle-row" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '8px' }}>
                   <div className="toggle-label-group">
-                    <span className="toggle-name">Speech Speakers</span>
-                    <span className="toggle-desc">Mutes/activates head speakers.</span>
+                    <span className="toggle-name">Speaker Volume</span>
+                    <span className="toggle-desc">Adjust robot master volume.</span>
                   </div>
-                  <label className="switch">
+                  <div style={{ display: 'flex', alignItems: 'center', width: '100%', gap: '10px' }}>
+                    <Volume2 size={16} className="cyan" />
                     <input 
-                      type="checkbox" 
-                      checked={audioVolume} 
-                      onChange={() => handleToggle('Speech Speakers', setAudioVolume, audioVolume)} 
+                      type="range" 
+                      min="0" 
+                      max="100" 
+                      value={robotVolume} 
+                      onChange={handleVolumeChange} 
+                      style={{ flex: 1, accentColor: 'var(--cyan)' }}
                     />
-                    <span className="slider"></span>
-                  </label>
+                    <span style={{ color: 'var(--cyan)', fontSize: '0.8rem', minWidth: '30px' }}>{robotVolume}%</span>
+                  </div>
                 </div>
               </div>
 
@@ -659,7 +825,7 @@ export default function App() {
           </div>
 
           {/* RAG Knowledge Base Panel */}
-          <div className="glass-panel" style={{ marginTop: '15px', display: 'flex', flexDirection: 'column', maxHeight: '280px' }}>
+          <div className="glass-panel" style={{ marginTop: '15px', display: 'flex', flexDirection: 'column', flex: 1, minHeight: '300px' }}>
             <div className="panel-header">
               <div className="panel-title">
                 <Database size={16} className="cyan" />
@@ -714,12 +880,23 @@ export default function App() {
                       alignItems: 'center'
                     }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <Database size={14} className="cyan" />
-                        <span style={{ fontSize: '11px', color: '#ddd' }}>{file.name}</span>
+                        <input 
+                          type="checkbox" 
+                          checked={file.active} 
+                          onChange={() => toggleDocActive(idx)}
+                          style={{ cursor: 'pointer', accentColor: 'var(--primary)' }}
+                        />
+                        <Database size={14} className={file.active ? "cyan" : ""} style={{ opacity: file.active ? 1 : 0.4 }} />
+                        <span style={{ fontSize: '11px', color: file.active ? '#ddd' : '#666', textDecoration: file.active ? 'none' : 'line-through' }}>{file.name}</span>
                       </div>
-                      <div style={{ display: 'flex', gap: '10px', fontSize: '9px', color: '#888', fontFamily: 'var(--font-mono)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '9px', color: '#888', fontFamily: 'var(--font-mono)' }}>
                         <span>{file.chunks} CHUNKS</span>
-                        <span>{file.size}</span>
+                        <Trash2 
+                          size={12} 
+                          style={{ color: '#ff4d4d', cursor: 'pointer', marginLeft: '5px' }} 
+                          onClick={() => handleDeleteDoc(idx)}
+                          title="Purge Document"
+                        />
                       </div>
                     </div>
                   ))}
@@ -727,7 +904,77 @@ export default function App() {
               </div>
             )}
           </div>
+
+          {/* Global V-RAG Source Images Stack */}
+          {(() => {
+            const latestWithImages = [...messages].reverse().find(m => m.source_images && m.source_images.length > 0);
+            const imgs = latestWithImages ? latestWithImages.source_images : [];
+            if (imgs.length === 0) return null;
+            
+            return (
+              <div className="glass-panel" style={{ marginTop: '15px', display: 'flex', flexDirection: 'column', padding: '15px' }}>
+                <div className="panel-header" style={{ marginBottom: '10px' }}>
+                  <div className="panel-title">
+                    <Database size={16} className="cyan" />
+                    <h3 style={{ fontSize: '12px' }}>Latest AI Context</h3>
+                  </div>
+                </div>
+                <div className="source-images-stack" style={{ display: 'flex', cursor: 'pointer', minHeight: '65px', alignItems: 'center', justifyContent: 'center' }}>
+                  {imgs.map((imgUrl, idx) => (
+                    <img 
+                      key={idx} 
+                      src={imgUrl} 
+                      alt="Source Page" 
+                      onClick={() => setFullScreenImage(imgUrl)}
+                      style={{
+                        width: '50px',
+                        height: '70px',
+                        objectFit: 'cover',
+                        border: '1px solid rgba(0, 200, 255, 0.6)',
+                        borderRadius: '4px',
+                        marginLeft: idx === 0 ? '0' : '-30px',
+                        boxShadow: '0 4px 10px rgba(0,0,0,0.8)',
+                        zIndex: imgs.length - idx,
+                        transition: 'transform 0.2s, z-index 0s',
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-10px)'; e.currentTarget.style.zIndex = 100; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.zIndex = imgs.length - idx; }}
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
         </section>
+        ) : (
+          <section className="sandbox-col" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+            <PresentationSandbox 
+              isTwinSpeaking={activeMotion !== ''}
+              onTriggerSpeech={(text, gesture, sync = false) => {
+                addLog('info', `Sandbox: Triggering twin speech for slide`);
+                setMessages(prev => [...prev, {
+                  id: Date.now(),
+                  sender: 'bot',
+                  text: text,
+                  gesture: gesture
+                }]);
+                setActiveMotion(gesture);
+                setTimeout(() => setActiveMotion(''), 800);
+                // Actually dispatch to the bridge for audio on robot
+                return fetch('http://localhost:5002/command', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ action: gesture, text: text, sync_speech: sync }) 
+                }).catch(() => {
+                   console.log("Port 5002 offline.");
+                });
+              }}
+              onDoubtSubmit={(text) => {
+                handleSendMessage(null, text);
+              }}
+            />
+          </section>
+        )}
 
       </main>
 
@@ -751,6 +998,36 @@ export default function App() {
           <div ref={logsEndRef} />
         </div>
       </footer>
+      {/* FULL SCREEN IMAGE MODAL */}
+      {fullScreenImage && (
+        <div 
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            width: '100vw',
+            height: '100vh',
+            backgroundColor: 'rgba(0, 10, 15, 0.9)',
+            zIndex: 9999,
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            cursor: 'pointer'
+          }}
+          onClick={() => setFullScreenImage(null)}
+        >
+          <img 
+            src={fullScreenImage} 
+            alt="Full Source" 
+            style={{
+              maxHeight: '90vh',
+              maxWidth: '90vw',
+              border: '2px solid var(--primary)',
+              boxShadow: '0 0 30px rgba(0, 255, 166, 0.2)'
+            }} 
+          />
+        </div>
+      )}
     </div>
   );
 }

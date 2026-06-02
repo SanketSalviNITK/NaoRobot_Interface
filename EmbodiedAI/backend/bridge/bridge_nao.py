@@ -2,7 +2,7 @@
 import sys
 import os
 
-SDK_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "pynaoqi-python2.7-2.8.6.23-win64-vs2015-20191127_152649", "lib")
+SDK_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "pynaoqi-python2.7-2.8.6.23-win64-vs2015-20191127_152649", "lib")
 if SDK_PATH not in sys.path:
     sys.path.append(SDK_PATH)
 if SDK_PATH not in os.environ['PATH']:
@@ -102,7 +102,9 @@ def init_bridge():
         import subprocess
         print("[Bridge] Automating LM Studio startup...")
         print("[Bridge] Starting LM Studio Server on all network interfaces...")
-        subprocess.call("lms server start --bind 0.0.0.0", shell=True)
+        subprocess.Popen("lms server start --bind 0.0.0.0", shell=True)
+        import time
+        time.sleep(3) # Give it a few seconds to boot up before loading model
         print("[Bridge] Loading model google/gemma-4-e4b...")
         subprocess.call("lms load google/gemma-4-e4b", shell=True)
         print("[Bridge] LM Studio automation completed.")
@@ -114,9 +116,11 @@ def init_bridge():
     print("[Bridge] Connecting to robot at " + ROBOT_IP + "...")
     
     try:
-        # 1. Create a local broker
-        print("[Bridge] Step 1: Creating ALBroker...")
-        _broker = ALBroker("myBroker", local_ip, 0, ROBOT_IP, 9559)
+        # 1. Create a local broker with a dynamic name to prevent collisions
+        import random
+        broker_name = "myBroker" + str(random.randint(1000, 9999))
+        print("[Bridge] Step 1: Creating ALBroker (" + broker_name + ")...")
+        _broker = ALBroker(broker_name, local_ip, 0, ROBOT_IP, 9559)
         
         # 1.5 Disable Autonomous Features to prevent overheating and conflicts
         print("[Bridge] Step 1.5: Disabling Autonomous Features...")
@@ -143,7 +147,7 @@ def init_bridge():
         
         # 2. Init Motions
         print("[Bridge] Step 2: Initializing Motion Proxies...")
-        _motions_instance = NaoMotions(ALProxy("ALMotion"), ALProxy("ALRobotPosture"))
+        _motions_instance = NaoMotions(ALProxy("ALMotion"), ALProxy("ALRobotPosture"), ALProxy("ALLeds"))
         
         # 3. Audio Device Check
         print("[Bridge] Step 3: Checking Audio Device Methods...")
@@ -158,7 +162,8 @@ def init_bridge():
         _memory = ALProxy("ALMemory")
         
         # 5. Init Audio Module
-        _audio_module = NAOAudioModule("NAOAudioModule")
+        audio_mod_name = "NAOAudioModule" + str(random.randint(1000, 9999))
+        _audio_module = NAOAudioModule(audio_mod_name)
         print("[Bridge] SUCCESS: NAO Sensors, Audio and Motion ready.")
         
     except Exception as e:
@@ -177,9 +182,38 @@ def speak():
     text = str(text)
 
     print("[Bridge] Speaking: " + text)
-    tts = get_proxy("ALTextToSpeech")
+    # Using ALAnimatedSpeech so the robot naturally gestures while talking
+    tts = get_proxy("ALAnimatedSpeech")
     if tts:
         tts.post.say(text)
+        return jsonify({"status": "ok"})
+    return jsonify({"status": "error"}), 500
+
+@app.route('/speak/stop', methods=['POST'])
+def speak_stop():
+    tts = get_proxy("ALTextToSpeech")
+    if tts:
+        try:
+            tts.stopAll()
+            return jsonify({"status": "ok"})
+        except Exception as e:
+            return jsonify({"status": "error", "reason": str(e)}), 500
+    return jsonify({"status": "error"}), 500
+
+@app.route('/speak_sync', methods=['POST'])
+def speak_sync():
+    data = request.get_json(force=True)
+    text = data.get("text", "")
+    if isinstance(text, unicode):
+        text = text.encode('utf-8')
+    text = str(text)
+
+    print("[Bridge] Speaking (Sync): " + text)
+    # Using ALAnimatedSpeech so the robot naturally gestures while talking
+    tts = get_proxy("ALAnimatedSpeech")
+    if tts:
+        # Blocks until finished
+        tts.say(text)
         return jsonify({"status": "ok"})
     return jsonify({"status": "error"}), 500
 
@@ -218,12 +252,74 @@ def motion():
         elif action == "shake_head": nm.shake_head()
         elif action == "explain": nm.explain()
         elif action == "thinking": nm.thinking()
-        elif action == "happy": nm.happy()
+        elif action == "happy" or action == "cheer": nm.cheer()
         elif action == "sad": nm.sad()
+        elif action == "shrug": nm.shrug()
+        elif action == "facepalm": nm.facepalm()
+        elif action == "deny": nm.deny()
+        elif action == "point_right": nm.point_right()
+        elif action == "point_left": nm.point_left()
+        elif action == "present": nm.present()
+        elif action == "beckon": nm.beckon()
+        elif action == "bow": nm.bow()
+        elif action == "crouch": nm.crouch()
         elif action == "stand": nm.stand()
         elif action == "sit": nm.sit()
+        elif action == "start_presentation": nm.start_presentation()
+        elif action == "stop_presentation": nm.stop_presentation()
         return jsonify({"status": "ok"})
     except Exception as e:
+        return jsonify({"status": "error", "reason": str(e)}), 500
+
+@app.route('/config', methods=['POST'])
+def config_feature():
+    data = request.json
+    feature = data.get("feature")
+    state = data.get("state")
+    
+    print("[Bridge] Config Request: {} -> {}".format(feature, state))
+    
+    try:
+        if feature == "autonomous_life":
+            life = get_proxy("ALAutonomousLife")
+            bg = get_proxy("ALBackgroundMovement")
+            if life:
+                if state:
+                    if life.getState() == "disabled":
+                        life.setState("solitary")
+                else:
+                    if life.getState() != "disabled":
+                        life.setState("disabled")
+            if bg:
+                bg.setEnabled(state)
+                
+        elif feature == "basic_awareness":
+            awareness = get_proxy("ALBasicAwareness")
+            if awareness:
+                if state:
+                    if not awareness.isAwarenessRunning():
+                        awareness.startAwareness()
+                else:
+                    if awareness.isAwarenessRunning():
+                        awareness.stopAwareness()
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        print("[Bridge] Config Error: " + str(e))
+        return jsonify({"status": "error", "reason": str(e)}), 500
+
+@app.route('/volume', methods=['POST'])
+def set_volume():
+    data = request.get_json(force=True)
+    vol = data.get("volume", 50)
+    try:
+        audio = get_proxy("ALAudioDevice")
+        if audio:
+            audio.setOutputVolume(int(vol))
+            print("[Bridge] Set volume to: " + str(vol))
+            return jsonify({"status": "ok", "volume": vol})
+        return jsonify({"status": "error", "reason": "ALAudioDevice not available"}), 500
+    except Exception as e:
+        print("[Bridge] Volume Error: " + str(e))
         return jsonify({"status": "error", "reason": str(e)}), 500
 
 @app.route('/joints', methods=['GET'])

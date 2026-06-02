@@ -46,7 +46,7 @@ export default function NaoModel({ joints }) {
         if (jointName.includes('ShoulderPitch') || jointName.includes('HipPitch') || jointName.includes('KneePitch') || jointName.includes('AnklePitch') || jointName.includes('HeadPitch')) {
           bone.rotation.y = rad;
         } else if (jointName.includes('ShoulderRoll')) {
-          bone.rotation.z = jointName.startsWith('L') ? rad : -rad; // Right arm roll might need inversion depending on symmetry
+          bone.rotation.z = rad; // Real robot RShoulderRoll already has correct sign mapping
         } else if (jointName.includes('ElbowRoll')) {
           bone.rotation.z = rad;
         } else if (jointName.includes('ElbowYaw') || jointName.includes('WristYaw')) {
@@ -66,7 +66,7 @@ export default function NaoModel({ joints }) {
   if (!nodes) return null;
 
   return (
-    <group ref={group} dispose={null}>
+    <group ref={group} dispose={null} rotation={[0, -Math.PI / 2, 0]}>
       <primitive object={scene} dispose={null} />
       
       {/* Dynamic Lighting matching the cybernetic dashboard */}

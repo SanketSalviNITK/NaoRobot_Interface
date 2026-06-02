@@ -12,6 +12,8 @@ import numpy as np
 from flask import Flask, request, jsonify
 import werkzeug.utils
 import rag_engine
+import document_parser
+import math
 
 # Global process tracker for the digital twin sync
 sync_process = None
@@ -21,7 +23,7 @@ try:
     import imageio_ffmpeg
     import shutil
     exe_path = imageio_ffmpeg.get_ffmpeg_exe()
-    base_dir = os.path.dirname(__file__)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
     local_ffmpeg = os.path.join(base_dir, "ffmpeg.exe")
     if not os.path.exists(local_ffmpeg):
         shutil.copy(exe_path, local_ffmpeg)
@@ -31,8 +33,8 @@ except:
     pass
 
 # --- CONFIGURATION ---
-LM_STUDIO_URL = "http://169.254.80.100:1234/v1/chat/completions"
-BRIDGE_URL = "http://127.0.0.1:5001"
+LM_STUDIO_URL = "http://localhost:1234/v1/chat/completions"
+BRIDGE_URL = "http://localhost:5001"
 
 print("[System] LM Studio Brain initialized (Local Mode).")
 
@@ -47,16 +49,18 @@ def after_request(response):
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
     return response
 
-def get_ai_decision(user_text, use_rag=False):
+def get_ai_decision(user_text, use_rag=False, active_docs=None):
     """Asks Gemini for a speech response and a physical gesture."""
     gestures_list = [
         "wave_right_hand", "nod_head", "shake_head", "thinking", 
-        "explain", "happy", "sad", "stand", "sit", "none"
+        "explain", "cheer", "happy", "sad", "shrug", "facepalm", 
+        "deny", "point_right", "point_left", "present", "beckon", 
+        "bow", "crouch", "stand", "sit", "none"
     ]
     
     global chat_history
     system_prompt = (
-        "You are the brain of a NAO humanoid robot. Respond to the user's input.\n"
+        "You are Chintu, a humanoid robot. Respond to the user's input.\n"
         "1. Keep your speech natural, friendly, and conversational. Ask follow-up questions when appropriate.\n"
         "2. Choose the most appropriate gesture from the list below.\n"
         f"AVAILABLE GESTURES: {', '.join(gestures_list)}\n\n"
@@ -65,9 +69,15 @@ def get_ai_decision(user_text, use_rag=False):
         "- If user asks you to stand up: use 'stand'.\n"
         "- If user asks you to sit down: use 'sit'.\n"
         "- If you agree or say yes: use 'nod_head'.\n"
-        "- If you disagree or say no/don't know: use 'shake_head'.\n"
+        "- If you disagree or say no: use 'shake_head'.\n"
+        "- If you don't know the answer (RAG miss) or are confused: use 'shrug'.\n"
+        "- If you are apologizing or correcting a mistake: use 'facepalm'.\n"
+        "- If you are expressing refusal or a warning: use 'deny'.\n"
+        "- If you are directing attention to a document or location: use 'point_right' or 'present'.\n"
+        "- If you are calling the user closer: use 'beckon'.\n"
+        "- If you are giving a formal welcome or goodbye: use 'bow'.\n"
         "- If you are explaining something or asking a question: use 'explain'.\n"
-        "- If you express joy/success: use 'happy'.\n"
+        "- If you express joy/success: use 'cheer' or 'happy'.\n"
         "- If you express sorrow: use 'sad'.\n"
         "- If you are thinking or processing: use 'thinking'.\n"
         "- If you are just talking or conversing normally, default to: 'explain'.\n\n"
@@ -75,9 +85,10 @@ def get_ai_decision(user_text, use_rag=False):
         "Example format: {\"speech\": \"I am a robot. What would you like to know?\", \"gestures\": [\"thinking\", \"explain\"]}"
     )
     
+    source_images = []
     if use_rag:
         print("[RAG] Fetching context...")
-        context = rag_engine.query(user_text)
+        context, source_images = rag_engine.query(user_text, active_docs=active_docs)
         if context:
             print(f"[RAG] Found context: {context[:100]}...")
             system_prompt += f"\n\nUSE THIS CONTEXT TO ANSWER THE USER: {context}"
@@ -132,7 +143,7 @@ def get_ai_decision(user_text, use_rag=False):
         if not speech:
             speech = "I am processing the data but I lack the words to explain it."
             
-        return speech, gestures
+        return speech, gestures, source_images
     except Exception as e:
         print(f"[Error] LM Studio reasoning failed: {e}")
         speech = "I am having a moment of digital confusion."
@@ -144,15 +155,17 @@ def get_ai_decision(user_text, use_rag=False):
                 # Clean up broken JSON syntax if it got cut off mid-generation
                 speech = re.sub(r'^\{?\s*"speech"\s*:\s*"', '', speech)
                 speech = re.sub(r'\\n', ' ', speech)
-        return speech, ["none"]
+        return speech, ["none"], []
 
-def execute_robot_actions(speech, gestures):
+def execute_robot_actions(speech, gestures, sync=False):
     """Sends the speech and motion commands to the Python 2.7 bridge."""
     try:
         # 1. Send Speech Command
         if speech and str(speech).strip():
             print(f"[Brain] Sending Speech: {speech}")
-            requests.post(f"{BRIDGE_URL}/speak", json={"text": str(speech)}, timeout=10)
+            endpoint = "/speak_sync" if sync else "/speak"
+            timeout_val = 180 if sync else 10
+            requests.post(f"{BRIDGE_URL}{endpoint}", json={"text": str(speech)}, timeout=timeout_val)
         
         # 2. Send Motion Command (if any)
         if not isinstance(gestures, list):
@@ -161,10 +174,12 @@ def execute_robot_actions(speech, gestures):
         for gest in gestures:
             if gest and gest.lower() != "none":
                 print(f"[Brain] Triggering Gesture: {gest}")
+                global sync_process
+                import time
+                sync_process = {"action": gest, "timestamp": time.time()}
                 try:
                     # Increase timeout to 30s as complex motions take time
                     requests.post(f"{BRIDGE_URL}/motion", json={"action": gest}, timeout=30)
-                    import time
                     time.sleep(1.5) # small pause between animations
                 except Exception as ex:
                     print(f"[Brain] Failed to send gesture '{gest}': {ex}")
@@ -180,7 +195,7 @@ def voice_input():
     print(f"\n[Voice Event] Robot heard: '{heard_word}'")
     
     # Process word through Gemini
-    speech, gestures = get_ai_decision(heard_word)
+    speech, gestures, source_images = get_ai_decision(heard_word)
     print(f"NAO Response: {speech} (Gestures: {gestures})")
     
     # Execute on robot
@@ -194,6 +209,8 @@ recognizer = sr.Recognizer()
 
 @server.route('/voice/listen', methods=['POST'])
 def voice_listen():
+    data = request.get_json() or {}
+    active_docs = data.get("active_docs", [])
     print("\n[Voice] Activating laptop microphone via sounddevice...")
     try:
         duration = 5 # Record for 5 seconds
@@ -212,7 +229,7 @@ def voice_listen():
         print(f"[Voice] Transcription result: '{recognized_text}'")
         
         # Generate AI Decision
-        speech, gestures = get_ai_decision(recognized_text)
+        speech, gestures, source_images = get_ai_decision(recognized_text, use_rag=(len(active_docs)>0), active_docs=active_docs)
         print(f"NAO Response: {speech} (Gestures: {gestures})")
         
         # Dispatch physical actions
@@ -225,7 +242,8 @@ def voice_listen():
             "recognized_text": recognized_text,
             "speech": speech,
             "gesture": first_gesture,
-            "gestures": gestures
+            "gestures": gestures,
+            "source_images": source_images
         })
         
     except sr.WaitTimeoutError:
@@ -244,10 +262,11 @@ def chat_endpoint():
     data = request.get_json()
     user_text = data.get("text", "")
     use_rag = data.get("rag_mode", False)
-    print(f"\n[Dashboard Chat] User sent: '{user_text}' (RAG: {use_rag})")
+    active_docs = data.get("active_docs", [])
+    print(f"\n[Dashboard Chat] User sent: '{user_text}' (RAG: {use_rag}, Active Docs: {active_docs})")
     
     # Process text through Gemini
-    speech, gestures = get_ai_decision(user_text, use_rag=use_rag)
+    speech, gestures, source_images = get_ai_decision(user_text, use_rag=use_rag, active_docs=active_docs)
     print(f"NAO Response: {speech} (Gestures: {gestures})")
     
     # Dispatch physical actions asynchronously so UI remains snappy
@@ -259,8 +278,115 @@ def chat_endpoint():
         "status": "success",
         "speech": speech,
         "gesture": first_gesture,
-        "gestures": gestures
+        "gestures": gestures,
+        "source_images": source_images
     })
+
+@server.route('/volume', methods=['POST'])
+def volume_endpoint():
+    data = request.get_json()
+    volume = data.get("volume", 50)
+    print(f"[Dashboard Command] Setting volume to {volume}")
+    try:
+        requests.post(f"{BRIDGE_URL}/volume", json={"volume": volume}, timeout=5)
+        return jsonify({"status": "success", "volume": volume})
+    except Exception as e:
+        print(f"[Bridge Error] Failed to set volume: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@server.route('/docs', methods=['GET'])
+def get_docs():
+    try:
+        docs = rag_engine.list_documents()
+        return jsonify({"status": "success", "documents": docs})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@server.route('/delete_doc', methods=['POST'])
+def delete_doc_endpoint():
+    data = request.get_json()
+    filename = data.get("filename", "")
+    if not filename:
+        return jsonify({"status": "error", "message": "No filename provided"}), 400
+        
+    try:
+        success = rag_engine.delete_document(filename)
+        return jsonify({"status": "success" if success else "error"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+def generate_slides_from_text(text):
+    system_prompt = (
+        "You are an AI assistant that summarizes document text into presentation slides. "
+        "You MUST output ONLY a valid JSON array. Each element in the array represents a slide. "
+        "Each slide must have the following keys: 'title' (string), 'bullets' (array of strings), and 'speaker_notes' (string). "
+        "Example output: [{\"title\": \"Introduction\", \"bullets\": [\"Welcome to the presentation\"], \"speaker_notes\": \"Hello everyone, welcome...\"}]"
+    )
+    
+    truncated_text = text[:8000]
+
+    payload = {
+        "model": "google/gemma-4-e4b",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Create slides for the following text:\n\n{truncated_text}"}
+        ],
+        "temperature": 0.3,
+        "max_tokens": 2048,
+        "stream": False
+    }
+    
+    try:
+        response = requests.post(LM_STUDIO_URL, json=payload, timeout=60)
+        response.raise_for_status()
+        raw_text = response.json()['choices'][0]['message']['content'].strip()
+        
+        start_idx = raw_text.find('[')
+        end_idx = raw_text.rfind(']')
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            extracted_json = raw_text[start_idx:end_idx+1]
+        else:
+            extracted_json = raw_text
+            
+        slides = json.loads(extracted_json)
+        return slides
+    except Exception as e:
+        print(f"[Error] LM Studio reasoning failed: {e}")
+        return []
+
+@server.route('/upload_presentation', methods=['POST'])
+def upload_presentation():
+    if 'file' not in request.files:
+        return jsonify({"status": "error", "message": "No file part"}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"status": "error", "message": "No selected file"}), 400
+        
+    if file:
+        filename = werkzeug.utils.secure_filename(file.filename)
+        temp_path = os.path.join(os.path.dirname(__file__), filename)
+        file.save(temp_path)
+        
+        text = ""
+        if filename.lower().endswith(".pdf"):
+            text = document_parser.extract_text_from_pdf(temp_path)
+        
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+            
+        if not text:
+            return jsonify({"status": "error", "message": "Could not extract text"}), 500
+            
+        slides = generate_slides_from_text(text)
+        
+        if not slides:
+            return jsonify({"status": "error", "message": "Failed to generate slides"}), 500
+            
+        return jsonify({
+            "status": "success", 
+            "message": "Slides generated",
+            "slides": slides
+        })
 
 @server.route('/upload_doc', methods=['POST'])
 def upload_doc():
@@ -298,12 +424,50 @@ def upload_doc():
 def command_endpoint():
     data = request.get_json()
     action = data.get("action", "")
-    print(f"\n[Dashboard Command] Triggering gesture: '{action}'")
+    text = data.get("text", "")
+    sync = data.get("sync_speech", False)
+    print(f"\n[Dashboard Command] Triggering gesture: '{action}' and speech: '{text}' (sync={sync})")
     
-    # Dispatch directly to bridge without Gemini processing
-    threading.Thread(target=execute_robot_actions, args=("", action)).start()
+    if sync:
+        execute_robot_actions(text, action, sync=True)
+    else:
+        # Dispatch directly to bridge without Gemini processing
+        threading.Thread(target=execute_robot_actions, args=(text, action)).start()
     
     return jsonify({"status": "success"})
+
+@server.route('/stop_speech', methods=['POST'])
+def stop_speech_endpoint():
+    try:
+        requests.post(f"{BRIDGE_URL}/speak/stop", timeout=5)
+        requests.post(f"{BRIDGE_URL}/motion", json={"action": "stop_presentation"}, timeout=5)
+        return jsonify({"status": "success"})
+    except Exception as e:
+        print(f"[Orchestrator] Error stopping speech: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@server.route('/wait_speech_done', methods=['POST'])
+def wait_speech_done():
+    data = request.get_json()
+    text = data.get("text", "")
+    try:
+        # Long timeout because speech can take a while (e.g. 180s)
+        requests.post(f"{BRIDGE_URL}/speak_sync", json={"text": str(text)}, timeout=180)
+        return jsonify({"status": "success"})
+    except Exception as e:
+        print(f"[Orchestrator] Error in sync speech: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@server.route('/config', methods=['POST'])
+def config_endpoint():
+    data = request.get_json()
+    try:
+        response = requests.post(f"{BRIDGE_URL}/config", json=data)
+        return jsonify(response.json())
+    except Exception as e:
+        print(f"[Orchestrator] Error forwarding config to bridge: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 # Start time tracking for the mock animation cycle
 start_time = time.time()
@@ -331,13 +495,13 @@ def generate_mock_telemetry(t):
         joints["LShoulderRoll"] = 0.4
         joints["LElbowYaw"] = -1.2
         # Wave bend
-        joints["LElbowRoll"] = -0.6 - math.sin(t * 6.0) * 0.4
+        joints["LElbowRoll"] = -1.2 - math.sin(t * 6.0) * 0.4
     else:
         # Normal standing arm pose
         joints["LShoulderPitch"] = 1.4
         joints["LShoulderRoll"] = 0.1
         joints["LElbowYaw"] = -0.8
-        joints["LElbowRoll"] = 0.4
+        joints["LElbowRoll"] = -0.4
         
     # Symmetrical stand-by pose for limbs
     joints["RElbowYaw"] = 0.8
@@ -408,7 +572,7 @@ def main():
                 continue
 
             print("Thinking...")
-            speech, gesture = get_ai_decision(user_input)
+            speech, gesture, source_images = get_ai_decision(user_input)
             
             print(f"NAO: {speech}")
             execute_robot_actions(speech, gesture)

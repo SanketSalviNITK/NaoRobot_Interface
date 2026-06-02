@@ -29,3 +29,7 @@ ffmpeg.exe
 .vscode/
 .idea/
 .DS_Store
+
+# Vector Database
+chroma_db/
+backend/orchestrator/chroma_db/
